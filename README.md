@@ -52,16 +52,5 @@ python python/generate_moe_gif.py \
   --experts 8 --topk 3 --embd 16 --frames 160 --fps 6 \
   --dot-period 360 --noise 0.18 --seed 42 --width 900 --height 500
 ```
-
-## Host for a preview card on LinkedIn
-1. **Netlify Drop**: drag‑and‑drop the `web/` folder → get a public URL.
-2. **GitHub Pages**: push repo → Settings → Pages → deploy `/web` folder (or root).
-
-The `index.html` already includes Open Graph meta tags:
-- `og:title`, `og:description`, `og:image` → `assets/preview.png`
-
-> Tip: LinkedIn won’t animate GIFs in the card. Use the static `assets/preview.png`,
-and upload your GIF as media in the post itself.
-
 ## License
 MIT — see `LICENSE`.
