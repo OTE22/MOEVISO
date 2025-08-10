@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MoE Visualizer — Top‑k, Shared & Micro-Experts</title>
+
+  <!-- Open Graph / Social -->
+  <meta property="og:title" content="MoE Visualizer — Top‑k, Shared & Micro-Experts" />
+  <meta property="og:description" content="Interactive MoE routing: watch top‑k micro‑experts light up with noisy routing." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="assets/preview.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root{
+      --bg:#0b0f16; --panel:#121826; --ink:#e6eefc; --muted:#a4b0c0; --accent:#5ea1ff;
+      --thin: rgba(255,255,255,0.1);
+    }
+    html,body{height:100%;}
+    body{ margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      color:var(--ink); background:linear-gradient(180deg,#0a0e14,#0b1020 25%,#0b0f16);}
+    .wrap{display:grid; grid-template-columns: 360px 1fr; gap:18px; padding:22px; max-width:1400px; margin:auto;}
+    .card{background:var(--panel); border:1px solid var(--thin); border-radius:14px; padding:16px;}
+    .title{font-weight:700; letter-spacing:.3px; margin-bottom:10px;}
+    .row{display:grid; grid-template-columns: 1fr 1fr; gap:10px;}
+    label{font-size:.86rem; color:var(--muted); display:block; margin-bottom:6px;}
+    input[type=number], input[type=text], input[type=range], select{
+      width:100%; padding:10px 12px; border-radius:10px; border:1px solid #263044; background:#0f1525; color:var(--ink);
+      outline:none;
+    }
+    input[type=range]{padding:0; height:6px;}
+    .btn{ display:inline-flex; align-items:center; gap:8px; border:1px solid #2a3752; background:#0f1a30; color:#cfe1ff;
+      padding:9px 12px; border-radius:10px; cursor:pointer; user-select:none;}
+    .btn:active{transform:translateY(1px);}
+    canvas{background:#0b0f16; border:1px solid var(--thin); border-radius:12px;}
+    .legend{font-size:.85rem; color:#c2cede}
+    .stack{display:flex; flex-direction:column; gap:10px}
+    .small{font-size:.8rem; color:var(--muted)}
+    .pill{display:inline-block; padding:3px 8px; border-radius:999px; font-size:.72rem; background:#132039; border:1px solid #263044; color:#9fc2ff}
+    .split{display:grid; gap:12px; grid-template-columns:1fr 1fr;}
+    .mspace{height:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="title">Controls</div>
+      <div class="stack">
+        <div class="row">
+          <div>
+            <label>Local experts (N<sub>local</sub>)</label>
+            <input id="nLocal" type="number" min="1" max="64" value="6">
+          </div>
+          <div>
+            <label>Shared experts (S<sub>shared</sub>)</label>
+            <input id="nShared" type="number" min="0" max="32" value="2">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Micro-experts per expert (M)</label>
+            <input id="micro" type="number" min="1" max="16" value="3">
+          </div>
+          <div>
+            <label>Top‑k (over all micro-experts)</label>
+            <input id="topk" type="number" min="1" max="64" value="6">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Embedding dimension</label>
+            <input id="nEmb" type="number" min="4" max="256" value="16">
+          </div>
+          <div>
+            <label>Noise (NoisyTopK)</label>
+            <input id="noise" type="range" min="0" max="1" step="0.01" value="0.25">
+            <div class="small" id="noiseVal">0.25</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label>Playback FPS</label>
+            <input id="fps" type="range" min="2" max="30" step="1" value="8">
+            <div class="small" id="fpsVal">8</div>
+          </div>
+          <div>
+            <label>Flow speed (packets & input)</label>
+            <input id="flow" type="range" min="0.1" max="2" step="0.05" value="0.6">
+            <div class="small" id="flowVal">0.60x</div>
+          </div>
+        </div>
+
+        <div>
+          <label>Input vector (comma‑separated)</label>
+          <input id="inVec" type="text" value="0.12, -0.33, 0.55, 0.02, -0.11, 0.21, -0.24, 0.31, -0.05, 0.17, 0.06, -0.18, 0.27, -0.14, 0.19, 0.04">
+        </div>
+        <div class="row">
+          <button class="btn" id="btnRandom">Randomize input</button>
+          <button class="btn" id="btnCompute">Compute once</button>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnAnim">Start animation</button>
+          <button class="btn" id="btnStop">Stop</button>
+        </div>
+        <div class="legend">
+          <div class="pill">Color = base expert group</div>
+          <div class="small">Thicker, brighter arcs = larger weight. Dots flow only through top‑k micro‑experts.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="split">
+        <div>
+          <div class="title">Routing Canvas</div>
+          <canvas id="viz" width="900" height="560"></canvas>
+        </div>
+        <div>
+          <div class="title">Top‑k Weights</div>
+          <canvas id="chart" height="260"></canvas>
+          <div class="mspace"></div>
+          <div class="title">Details</div>
+          <div class="small" id="details">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+function randn() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
+function parseVector(str, n) {
+  const arr = str.split(/[,\s]+/).map(s => s.trim()).filter(Boolean).map(Number);
+  if (arr.length < n) {
+    const out = arr.slice();
+    while (out.length < n) out.push(0);
+    return out.slice(0, n);
+  }
+  return arr.slice(0, n);
+}
+function normalize(v) {
+  const norm = Math.sqrt(v.reduce((s,x) => s + x*x, 0)) || 1;
+  return v.map(x => x / norm);
+}
+const PALETTE = ['#6EE7B7','#93C5FD','#F472B6','#F59E0B','#34D399','#60A5FA','#A78BFA','#FB7185','#22D3EE','#EAB308','#4ADE80','#F97316','#38BDF8','#2DD4BF','#F43F5E','#84CC16'];
+
+let animId = null;
+let W = [];
+let lastConfig = null;
+let walkX = [];
+let chart;
+let phase = 0;
+let lastTime = 0;
+let frameInterval = 100;
+
+const el = s => document.querySelector(s);
+const viz = el('#viz');
+const ctx = viz.getContext('2d');
+const chartCtx = el('#chart').getContext('2d');
+const details = el('#details');
+
+function line(ctx, pts, opts={}){
+  const { width=1, color='#fff', alpha=1 } = opts;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width;
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke(); ctx.restore();
+}
+function circle(ctx, x, y, r, color='#fff', alpha=1, fill=true){
+  ctx.save(); ctx.globalAlpha = alpha; ctx.beginPath();
+  ctx.arc(x,y,r,0,2*Math.PI);
+  if (fill){ ctx.fillStyle = color; ctx.fill(); } else { ctx.strokeStyle = color; ctx.stroke(); }
+  ctx.restore();
+}
+function rect(ctx, x, y, w, h, color='#fff', alpha=1){
+  ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.strokeRect(x,y,w,h); ctx.restore();
+}
+function qBezier(p0, p1, p2, t){
+  const a = (1-t)*(1-t), b = 2*(1-t)*t, c = t*t;
+  return { x: a*p0.x + b*p1.x + c*p2.x, y: a*p0.y + b*p1.y + c*p2.y };
+}
+function layout(config){
+  const { nLocal, nShared, micro } = config;
+  const leftX = 120, rightX = viz.width - 200;
+  const total = nLocal + nShared;
+  const gap = (viz.height - 140) / Math.max(1, total-1);
+  const experts = [];
+  for (let i = 0; i < total; i++){
+    const y = 70 + i*gap;
+    experts.push({ x:rightX, y, w:130, h:46, micro:[] });
+  }
+  for (let i=0;i<total;i++){
+    const box = experts[i];
+    const mGap = box.w / (micro+1);
+    for (let j=0;j<micro;j++){
+      const mx = box.x - box.w/2 + (j+1)*mGap;
+      const my = box.y + box.h/2 + 12;
+      box.micro.push({ x: mx, y: my });
+    }
+  }
+  const router = { x:leftX, y: viz.height/2 };
+  return { router, experts };
+}
+function ensureProjection(config){
+  const key = JSON.stringify(config);
+  if (key === lastConfig && W.length) return;
+  lastConfig = key;
+  const { nEmb, nLocal, nShared, micro } = config;
+  const totalMicro = (nLocal + nShared) * micro;
+  W = Array.from({length: nEmb}, ()=> Array.from({length: totalMicro}, randn));
+  walkX = normalize(Array.from({length:nEmb}, randn));
+}
+function computeWeights(config, xVec){
+  const { nEmb, nLocal, nShared, micro, topk, noise } = config;
+  const totalMicro = (nLocal+nShared)*micro;
+  const logits = Array.from({length:totalMicro}, (_,j)=>{
+    let s=0; for(let i=0;i<nEmb;i++) s += xVec[i]*W[i][j];
+    return s + noise*randn();
+  });
+  const idx = logits.map((v,i)=>[v,i]).sort((a,b)=>b[0]-a[0]).slice(0, Math.min(topk,totalMicro));
+  const chosen = idx.map(pair=>pair[1]);
+  const maxLogit = Math.max(...idx.map(p=>p[0]));
+  const exps = idx.map(p=> Math.exp(p[0]-maxLogit));
+  const sum = exps.reduce((a,b)=>a+b,0) || 1;
+  const weights = idx.map((p,k)=> exps[k]/sum);
+  return { chosen, weights };
+}
+function draw(config, xVec){
+  ctx.clearRect(0,0,viz.width, viz.height);
+  const L = layout(config);
+  const { router, experts } = L;
+  const colors = i => PALETTE[i % PALETTE.length];
+  circle(ctx, router.x, router.y, 32, '#8AB4FF', 1, false);
+  ctx.fillStyle = '#cfe1ff'; ctx.font = '14px system-ui'; ctx.fillText('Router', router.x-26, router.y+4);
+
+  const total = config.nLocal + config.nShared;
+  for(let i=0;i<total;i++){
+    const box = experts[i];
+    rect(ctx, box.x - box.w/2, box.y - box.h/2, box.w, box.h, colors(i), .9);
+    ctx.fillStyle = colors(i); ctx.globalAlpha=0.18;
+    ctx.fillRect(box.x - box.w/2, box.y - box.h/2, box.w, box.h); ctx.globalAlpha=1;
+    ctx.fillStyle = '#cfe1ff'; ctx.fillText(`${i < config.nLocal ? 'E'+i : 'S'+(i-config.nLocal)}`, box.x - box.w/2 + 8, box.y + 4);
+    for (let j=0;j<config.micro;j++){
+      const m = box.micro[j]; circle(ctx, m.x, m.y, 4, colors(i), .9, true);
+    }
+  }
+  ctx.fillStyle = '#9fb5d6';
+  ctx.fillText('Local Experts', viz.width - 200, 30);
+  if (config.nShared>0) ctx.fillText('Shared Experts', viz.width - 200, viz.height - 20);
+
+  const { chosen, weights } = computeWeights(config, xVec);
+  const p0 = { x: router.x+28, y: router.y };
+
+  chosen.forEach((microIndex, k)=>{
+    const base = Math.floor(microIndex / config.micro);
+    const microIdx = microIndex % config.micro;
+    const box = experts[base];
+    const p2 = box.micro[microIdx];
+    const p1 = { x: (p0.x+p2.x)/2, y: (p0.y+p2.y)/2 - 70 };
+    const pts = []; for(let s=0;s<=24;s++){ pts.push(qBezier(p0,p1,p2, s/24)); }
+    const w = Math.max(2, Math.round(2 + 18*weights[k]));
+    line(ctx, pts, { width: w, color: colors(base), alpha: .95 });
+
+    const dot = qBezier(p0,p1,p2, phase);
+    circle(ctx, dot.x, dot.y, 5, colors(base), .95, true);
+  });
+
+  const human = chosen.map((mi,k)=>{
+      const base = Math.floor(mi/config.micro), microIdx = mi % config.micro;
+      const tag = base < config.nLocal ? `E${base}.${microIdx}` : `S${base-config.nLocal}.${microIdx}`;
+      return `${tag}:${weights[k].toFixed(2)}`;
+    }).join(', ');
+  details.textContent = `Top‑${config.topk} micro‑experts: ${human}`;
+
+  const labels = chosen.map(mi=>{
+    const base = Math.floor(mi/config.micro), microIdx = mi % config.micro;
+    return base < config.nLocal ? `E${base}.${microIdx}` : `S${base-config.nLocal}.${microIdx}`;
+  });
+  const data = weights.map(w=>w.toFixed(4));
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = data;
+  chart.data.datasets[0].backgroundColor = labels.map((lab,idx)=> {
+    const base = Math.floor(chosen[idx]/config.micro);
+    return colors(base) + 'cc';
+  });
+  chart.update('none');
+}
+function tick(config, ts){
+  if (!lastTime) lastTime = ts;
+  const delta = ts - lastTime;
+  if (delta >= frameInterval) {
+    lastTime = ts;
+    const flow = +el('#flow').value || 0.6;
+    phase = (phase + (flow * delta) / (2200)) % 1;
+    const n = config.nEmb;
+    let noise = Array.from({length:n}, randn);
+    const nn = Math.sqrt(noise.reduce((s,x)=>s+x*x,0)) || 1; noise = noise.map(x => x/nn);
+    const mix = Math.max(0.85, 0.97 - 0.15*flow);
+    walkX = normalize(walkX.map((v,i)=> mix*v + (1-mix)*noise[i]));
+    draw(config, walkX);
+  }
+  animId = requestAnimationFrame((t)=>tick(config, t));
+}
+function configFromUI(){
+  const nLocal = +el('#nLocal').value || 1;
+  const nShared = +el('#nShared').value || 0;
+  const micro = +el('#micro').value || 1;
+  const topk  = +el('#topk').value || 1;
+  const nEmb  = +el('#nEmb').value || 16;
+  const noise = +el('#noise').value || 0;
+  const fps   = +el('#fps').value || 8;
+  el('#noiseVal').textContent = noise.toFixed(2);
+  el('#fpsVal').textContent = fps.toString();
+  frameInterval = Math.max(10, Math.round(1000 / fps));
+  const flow = +el('#flow').value || 0.6;
+  el('#flowVal').textContent = flow.toFixed(2) + 'x';
+  return { nLocal, nShared, micro, topk, nEmb, noise };
+}
+function randomizeInput(){
+  const nEmb = +el('#nEmb').value || 16;
+  const v = Array.from({length:nEmb}, randn);
+  const vv = normalize(v);
+  el('#inVec').value = vv.map(x=>x.toFixed(3)).join(', ');
+}
+function computeOnce(){
+  const cfg = configFromUI();
+  ensureProjection(cfg);
+  const x = normalize(parseVector(el('#inVec').value, cfg.nEmb));
+  draw(cfg, x);
+}
+function startAnim(){
+  const cfg = configFromUI();
+  ensureProjection(cfg);
+  if (animId) cancelAnimationFrame(animId);
+  lastTime = 0; phase = 0;
+  animId = requestAnimationFrame((t)=>tick(cfg, t));
+}
+function stopAnim(){ if (animId){ cancelAnimationFrame(animId); animId=null; } }
+chart = new Chart(chartCtx, {
+  type: 'bar',
+  data: { labels: [], datasets: [{ label:'weight', data: [], backgroundColor: [] }]},
+  options: { responsive:true, maintainAspectRatio:false, scales: { y: { suggestedMin:0, suggestedMax:1 } }, plugins: { legend:{ display:false } } }
+});
+const scriptsLoaded = true;
+document.querySelector('#btnRandom').addEventListener('click', randomizeInput);
+document.querySelector('#btnCompute').addEventListener('click', computeOnce);
+document.querySelector('#btnAnim').addEventListener('click', startAnim);
+document.querySelector('#btnStop').addEventListener('click', stopAnim);
+document.querySelector('#fps').addEventListener('input', configFromUI);
+document.querySelector('#flow').addEventListener('input', configFromUI);
+randomizeInput(); computeOnce();
+</script>
+</body>
+</html>
